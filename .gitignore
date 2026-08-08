@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+
+# Runtime state: ADK sessions and stored user profiles
+demo.db
+demo.db-wal
+demo.db-shm
