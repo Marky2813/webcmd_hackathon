@@ -28,9 +28,9 @@ _CHECKOUT_TIMEOUT_S = 90
 
 async def prepare_cart(
     product_url: str,
-    size: str,
-    colour: str,
     tool_context: ToolContext,
+    size: str = "",
+    colour: str = "",
 ) -> dict:
     """Prepares a cart for the user to review. Never pays, on any site.
 
@@ -46,10 +46,12 @@ async def prepare_cart(
 
     Args:
         product_url: The full product URL from a search result.
-        size: The exact size label to add, e.g. "UK 9" on Amazon or "9" on
-            Flipkart. Empty string if the product has no size choice.
-        colour: The exact colour label. Amazon only; ignored elsewhere. Empty
-            string if not needed.
+        size: The exact size label the user chose, e.g. "UK 9" on Amazon or
+            "9" on Flipkart. Pass an empty string only when the user did not
+            request a size or the product has no size choice.
+        colour: The exact Amazon colour label the user chose. Do not derive it
+            from a title, URL, or search result. Pass an empty string when the
+            user did not request a colour or the product has no colour choice.
 
     Returns:
         A dict with 'status' and, on success, the item details plus
@@ -77,11 +79,13 @@ async def prepare_cart(
 
 
 async def _prepare_amazon(url: str, size: str, colour: str) -> dict:
+    size = size.strip()
+    colour = colour.strip()
     args: list[str] = [url]
-    if size.strip():
-        args += ["--size", size.strip()]
-    if colour.strip():
-        args += ["--colour", colour.strip()]
+    if size:
+        args += ["--size", size]
+    if colour:
+        args += ["--colour", colour]
 
     try:
         # Offloaded: a browser cart action on the event loop would stall every
@@ -90,7 +94,7 @@ async def _prepare_amazon(url: str, size: str, colour: str) -> dict:
             run, "amazon-in", "cart-add", *args, timeout=_CHECKOUT_TIMEOUT_S
         )
     except WebcmdError as exc:
-        return _failed(url, exc)
+        return _amazon_failed(url, size, colour, exc)
 
     if not rows:
         return {"status": "error", "message": "Cart add returned nothing.", "handoff_url": url}
@@ -176,3 +180,22 @@ def _failed(url: str, exc: WebcmdError) -> dict:
         "handoff_url": url,
         "hint": "Offer the plain product link instead.",
     }
+
+
+def _amazon_failed(url: str, size: str, colour: str, exc: WebcmdError) -> dict:
+    """Return an actionable variant error instead of making the model retry blindly."""
+    detail = str(exc)
+    if "not uniquely available" in detail or "not available" in detail:
+        dimension = "colour" if "colour" in detail else "size"
+        return {
+            "status": "variant_unavailable",
+            "site": "amazon.in",
+            "requested_size": size,
+            "requested_colour": colour,
+            "message": (
+                f"The requested Amazon {dimension} is not available under that exact label. "
+                "Ask the user for the exact visible option from the product page; do not guess or retry the same value."
+            ),
+            "handoff_url": url,
+        }
+    return _failed(url, exc)
